@@ -1,0 +1,98 @@
+// ============================================================================
+// PRISMA SCHEMA — Hotel Booking Management
+// ----------------------------------------------------------------------------
+// Định nghĩa cấu trúc cơ sở dữ liệu PostgreSQL cho tính năng đặt phòng.
+// Sau khi cấu hình DATABASE_URL trong .env, chạy lệnh sau để tạo migration:
+//   npx prisma migrate dev --name init
+// ============================================================================
+
+generator client {
+  provider   = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Vai trò người dùng — dùng cho phân quyền (RBAC) ở tầng API
+enum Role {
+  USER
+  ADMIN
+}
+
+/// Trạng thái vòng đời của một đơn đặt phòng
+/// Luồng hợp lệ: PENDING -> CONFIRMED -> (kết thúc)
+///               PENDING -> CANCELLED -> (kết thúc)
+///               CONFIRMED -> CANCELLED -> (kết thúc)
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+/// Trạng thái hoạt động của phòng
+enum RoomStatus {
+  AVAILABLE
+  MAINTENANCE
+}
+
+/// Người dùng hệ thống — gồm cả khách hàng (USER) và quản trị viên (ADMIN)
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String // Mật khẩu đã băm bằng bcrypt — TUYỆT ĐỐI không lưu plaintext
+  fullName  String
+  role      Role     @default(USER)
+
+  // Quan hệ 1 - N: Một User có nhiều Booking
+  bookings  Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+/// Phòng khách sạn
+model Room {
+  id            String     @id @default(uuid())
+  roomNumber    String     @unique
+  roomType      String // VD: Standard, Deluxe, Suite
+  pricePerNight Decimal    @db.Decimal(12, 2)
+  status        RoomStatus @default(AVAILABLE)
+
+  // Quan hệ 1 - N: Một Room có nhiều Booking
+  bookings      Booking[]
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@map("rooms")
+}
+
+/// Đơn đặt phòng — bảng trung tâm của tính năng Hotel Booking Management
+model Booking {
+  id           String        @id @default(uuid())
+  userId       String
+  roomId       String
+  checkInDate  DateTime
+  checkOutDate DateTime
+  totalPrice   Decimal       @db.Decimal(12, 2)
+  status       BookingStatus @default(PENDING)
+
+  // onDelete: Cascade  -> Xoá User thì xoá luôn lịch sử booking của họ
+  // onDelete: Restrict -> KHÔNG cho xoá Room nếu vẫn còn Booking tham chiếu
+  //                       (tránh mất dấu vết dữ liệu giao dịch đã phát sinh)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room Room @relation(fields: [roomId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Index tổng hợp tăng tốc truy vấn kiểm tra trùng lịch — đây là câu
+  // truy vấn chạy nhiều nhất hệ thống (mỗi lần tạo/sửa booking đều gọi tới)
+  @@index([roomId, checkInDate, checkOutDate])
+  @@index([userId])
+  @@map("bookings")
+}
